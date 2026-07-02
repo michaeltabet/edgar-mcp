@@ -6,7 +6,7 @@ stages:
   - build
 
 variables:
-  IMAGE: $CI_REGISTRY/michaeltabet/edgar-mcp
+  IMAGE: $CI_REGISTRY_IMAGE
 
 build:
   stage: build
