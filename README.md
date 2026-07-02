@@ -33,14 +33,17 @@ cached in SQLite at `~/.cache/edgar-mcp/`).
 |---|---|
 | `list_statements` | all ~70 tagged statements & disclosures in a filing, not just the big four |
 | `financial_statements` | any statement with every row carrying concept, label, per-period values, hierarchy level, dimension axis/member, balance direction, calc weight + parent |
-| `explain_number` | a concept **or a raw value** → official taxonomy definition, all labels, balance meaning, every fact with period/unit/precision/dimensions, calculation parents & children with weights, footnotes |
+| `explain_number` | a concept **or a raw value** → official taxonomy definition, all labels, balance meaning, every fact with period/unit/precision/dimensions, calculation parents & children **with their actual values and an arithmetic tie-out check**, footnotes |
 | `search_facts` | search all tagged facts by label, concept, or dimension member ("Greater China" finds the facts sliced by that segment) |
 | `concept_timeseries` | every value a company ever reported for one tag, with form/date/accession provenance (SEC companyconcept API) |
+| `statement_history` | one statement stitched across N filings — long multi-year (or multi-quarter) table, concepts aligned across label changes |
+| `compare_peers` | one concept across ALL SEC filers for one period (Frames API) — economy-wide or a specific CIK list |
 
 **Ownership**
 | tool | what it does |
 |---|---|
 | `insider_transactions` | Forms 3/4/5 parsed from XML: who, role, code, shares, price, owned-after |
+| `fund_holdings` | a 13F manager's latest portfolio: issuer, CUSIP, ticker, value, shares, put/call, voting, % of portfolio |
 
 ## Run
 

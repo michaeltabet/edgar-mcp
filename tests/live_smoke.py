@@ -50,6 +50,20 @@ check("explain_number by value", s.explain_number, AAPL_10K, value=416161000000)
 check("search_facts", s.search_facts, AAPL_10K, query="Greater China")
 check("concept_timeseries", s.concept_timeseries, "AAPL", "us-gaap:PaymentsForRepurchaseOfCommonStock", limit=5)
 check("insider_transactions", s.insider_transactions, "AAPL", limit=2)
+check("statement_history", s.statement_history, "AAPL", statement="income", n_filings=2, max_rows=5)
+check("compare_peers", s.compare_peers, "us-gaap:GrossProfit", "CY2024", limit=5)
+check("fund_holdings", s.fund_holdings, "1067983", limit=5)
+
+# form diversity: 10-Q part-item, 8-K item, Form 10 (spin-off)
+from edgar import Company
+
+tq = Company("AAPL").latest("10-Q").accession_no
+check("read_section 10-Q Part I Item 2", s.read_section, tq, item="Part I, Item 2", max_chars=300)
+e8 = Company("AAPL").get_filings(form="8-K").latest(1).accession_no
+check("read_section 8-K 2.02", s.read_section, e8, item="Item 2.02", max_chars=300)
+f10 = json.loads(s.full_text_search('"Information Statement"', forms="10-12B", limit=1))
+if f10.get("hits"):
+    check("filing_contents Form 10", s.filing_contents, f10["hits"][0]["accession_no"])
 
 if exp:
     print("\n--- explain_number depth check ---")

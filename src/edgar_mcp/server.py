@@ -47,17 +47,21 @@ def find_company(query: str) -> str:
     """
     try:
         c = company_for(query)
+        sub = sec_get(f"https://data.sec.gov/submissions/CIK{c.cik:010d}.json").json()
         return jdump(
             {
                 "cik": c.cik,
-                "name": c.name,
-                "tickers": getattr(c, "tickers", None),
-                "exchanges": getattr(c, "exchanges", None),
-                "sic": getattr(c, "sic", None),
-                "sic_description": getattr(c, "sic_description", None),
-                "fiscal_year_end": getattr(c, "fiscal_year_end", None),
-                "state_of_incorporation": getattr(c, "state_of_incorporation", None),
-                "website": getattr(c, "website", None),
+                "name": sub.get("name") or c.name,
+                "tickers": sub.get("tickers"),
+                "exchanges": sub.get("exchanges"),
+                "sic": sub.get("sic"),
+                "sic_description": sub.get("sicDescription"),
+                "entity_type": sub.get("entityType"),
+                "fiscal_year_end": sub.get("fiscalYearEnd"),
+                "state_of_incorporation": sub.get("stateOfIncorporation"),
+                "former_names": [n.get("name") for n in sub.get("formerNames", [])]
+                or None,
+                "website": sub.get("website") or None,
             }
         )
     except Exception:
@@ -226,10 +230,13 @@ def read_section(accession_no: str, item: str | None = None, max_chars: int = 30
     available = list(items)
     if not item:
         return jdump({"form": f.form, "available_items": available})
-    # tolerate "1A", "Item 1A", "item 1a"
-    want = item.lower().replace("item", "").strip()
-    match = next(
-        (i for i in available if i.lower().replace("item", "").strip() == want), None
+    # tolerate "1A", "Item 1A", "item 1a", and 10-Q's "Part I, Item 2"
+    def norm(s: str) -> str:
+        return "".join(ch for ch in s.lower() if ch.isalnum())
+
+    want = norm(item)
+    match = next((i for i in available if norm(i) == want), None) or next(
+        (i for i in available if norm(i).endswith(want)), None
     )
     if match is None:
         return jdump({"error": f"{item!r} not found", "available_items": available})
@@ -388,29 +395,72 @@ def financial_statements(
     )
 
 
-def _calc_relationships(x, element_id: str) -> dict:
-    """Parents and children of a concept across the filing's calc trees."""
+def _calc_relationships(x, element_id: str, facts_df) -> dict:
+    """Parents and children of a concept across the filing's calc trees,
+    with each child's actual value for the primary period so the
+    arithmetic is verifiable."""
+    import pandas as pd
+
+    undimmed = facts_df[~facts_df["is_dimensioned"].fillna(False)]
+
+    def value_for(concept_under: str, period_key: str):
+        rows = undimmed[
+            (undimmed["concept"].apply(lambda c: norm_concept(str(c)) == concept_under))
+            & (undimmed["period_key"] == period_key)
+        ]
+        if rows.empty:
+            return None
+        v = rows.iloc[0]["numeric_value"]
+        return None if pd.isna(v) else v
+
+    own_rows = undimmed[
+        undimmed["concept"].apply(lambda c: norm_concept(str(c)) == element_id)
+    ]
+    period_key = (
+        own_rows.sort_values("period_end").iloc[-1]["period_key"]
+        if not own_rows.empty
+        else None
+    )
+
     rels = []
     for role, tree in x.calculation_trees.items():
         nodes = getattr(tree, "all_nodes", {}) or {}
         node = nodes.get(element_id)
         if node is None:
             continue
-        children = [
-            {
-                "concept": ch,
-                "weight": getattr(nodes.get(ch), "weight", None),
+        children = []
+        contribution = 0.0
+        complete = bool(node.children) and period_key is not None
+        for ch in node.children or []:
+            w = getattr(nodes.get(ch), "weight", None)
+            v = value_for(ch, period_key) if period_key else None
+            if v is None or w is None:
+                complete = False
+            else:
+                contribution += w * v
+            children.append(
+                {
+                    "concept": ch,
+                    "weight": w,
+                    "value": v,
+                    "value_formatted": fmt_value(v),
+                }
+            )
+        rel = {
+            "statement_role": role.rsplit("/", 1)[-1],
+            "summed_into": node.parent,
+            "own_weight_in_parent": node.weight,
+            "sums_from_children": children or None,
+        }
+        own_val = value_for(element_id, period_key) if period_key else None
+        if complete and own_val is not None:
+            rel["arithmetic_check"] = {
+                "period": period_key,
+                "sum_of_children_x_weights": contribution,
+                "reported_value": own_val,
+                "ties_out": abs(contribution - own_val) < max(abs(own_val) * 1e-6, 1),
             }
-            for ch in (node.children or [])
-        ]
-        rels.append(
-            {
-                "statement_role": role.rsplit("/", 1)[-1],
-                "summed_into": node.parent,
-                "own_weight_in_parent": node.weight,
-                "sums_from_children": children or None,
-            }
-        )
+        rels.append(rel)
     return {"calculation": rels or None}
 
 
@@ -530,7 +580,7 @@ def explain_number(
             "debit balance: expenses/assets-like; positive value increases"
             " expenses or assets"
         )
-    out.update(_calc_relationships(x, c_under))
+    out.update(_calc_relationships(x, c_under, facts_df))
     if out["official_definition"] is None and not c_under.startswith(
         ("us-gaap", "dei", "srt")
     ):
@@ -675,6 +725,95 @@ def concept_timeseries(
     )
 
 
+@mcp.tool()
+def statement_history(
+    company: str,
+    statement: str = "income",
+    n_filings: int = 5,
+    form: str = "10-K",
+    max_rows: int = 100,
+) -> str:
+    """One statement stitched across multiple filings — a long multi-year
+    (or multi-quarter, form="10-Q") view in a single table.
+
+    `statement`: income | balance | cashflow | equity | comprehensive_income.
+    Stitching aligns concepts across filings even when labels shifted, so
+    each row is one concept with a column per period. Heavier than
+    financial_statements (parses n_filings XBRL documents) — keep
+    n_filings modest.
+    """
+    from edgar.xbrl import XBRLS
+
+    c = company_for(company)
+    filings = c.get_filings(form=form).head(n_filings)
+    xs = XBRLS.from_filings(filings)
+    key = _STATEMENT_ALIASES.get(statement.lower().strip(), statement)
+    st = getattr(xs.statements, key)()
+    df = st.to_dataframe()
+    period_cols = [col for col in df.columns if col[:2] == "20"]
+    keep = [col for col in ["concept", "label", *period_cols] if col in df.columns]
+    return jdump(
+        {
+            "company": c.name,
+            "statement": statement,
+            "filings_stitched": len(filings),
+            "periods": period_cols,
+            "rows": df_records(df[keep], limit=max_rows),
+        }
+    )
+
+
+@mcp.tool()
+def compare_peers(
+    concept: str,
+    period: str,
+    unit: str = "USD",
+    ciks: list[int] | None = None,
+    limit: int = 25,
+) -> str:
+    """Compare ONE XBRL concept across ALL SEC filers for one period
+    (SEC Frames API) — cross-sectional peer comparison.
+
+    `period`: "CY2024" (annual), "CY2024Q1" (quarterly duration), or
+    "CY2024Q1I" (instant, needed for balance-sheet concepts like
+    us-gaap:Assets). `unit` e.g. USD, shares, USD-per-shares. Pass `ciks`
+    to pull specific peers; otherwise returns the largest `limit` values
+    economy-wide. Every point has CIK + accession provenance.
+    """
+    tax, _, name = concept_colon(concept).partition(":")
+    data = sec_get(
+        f"https://data.sec.gov/api/xbrl/frames/{tax}/{name}/{unit}/{period}.json"
+    ).json()
+    points = data.get("data", [])
+    if ciks:
+        want = set(ciks)
+        points = [p for p in points if p.get("cik") in want]
+    else:
+        points = sorted(points, key=lambda p: abs(p.get("val") or 0), reverse=True)
+    rows = [
+        {
+            "cik": p.get("cik"),
+            "entity": p.get("entityName"),
+            "value": p.get("val"),
+            "value_formatted": fmt_value(p.get("val")),
+            "location": p.get("loc"),
+            "period_end": p.get("end"),
+            "accession_no": p.get("accn"),
+        }
+        for p in points[:limit]
+    ]
+    return jdump(
+        {
+            "concept": f"{tax}:{name}",
+            "official_definition": taxonomy.definition(f"{tax}:{name}"),
+            "period": period,
+            "unit": unit,
+            "total_filers_in_frame": data.get("pts"),
+            "companies": rows,
+        }
+    )
+
+
 # --------------------------------------------------------------------------- #
 # ownership layer
 # --------------------------------------------------------------------------- #
@@ -704,6 +843,56 @@ def insider_transactions(company: str, limit: int = 10) -> str:
             rec["parse_error"] = str(e)
         out.append(rec)
     return jdump({"company": c.name, "filings": out})
+
+
+@mcp.tool()
+def fund_holdings(manager: str, min_value: float = 0, limit: int = 50) -> str:
+    """A 13F institutional manager's latest reported portfolio, parsed.
+
+    `manager` is the manager's CIK or name (e.g. 1067983 for Berkshire).
+    Returns each position: issuer, class, CUSIP, ticker, market value,
+    shares, put/call flag, voting authority — sorted by value, largest
+    first. `min_value` filters small positions (USD).
+    """
+    c = company_for(manager)
+    f = c.get_filings(form="13F-HR").latest(1)
+    if f is None:
+        return jdump({"error": f"{c.name} has no 13F-HR filings"})
+    o = f.obj()
+    df = o.infotable
+    df = df[df["Value"] >= min_value].sort_values("Value", ascending=False)
+    total = float(df["Value"].sum())
+    keep = [
+        col
+        for col in [
+            "Issuer",
+            "Class",
+            "Ticker",
+            "Cusip",
+            "Value",
+            "SharesPrnAmount",
+            "Type",
+            "PutCall",
+            "SoleVoting",
+            "SharedVoting",
+        ]
+        if col in df.columns
+    ]
+    rows = df_records(df[keep], limit=limit)
+    for r in rows:
+        r["pct_of_portfolio"] = round(100 * (r["Value"] or 0) / total, 2) if total else None
+    return jdump(
+        {
+            "manager": c.name,
+            "accession_no": f.accession_no,
+            "period": str(getattr(f, "report_date", "") or "") or None,
+            "filed": str(f.filing_date),
+            "total_positions": int(len(df)),
+            "total_value": total,
+            "total_value_formatted": fmt_value(total),
+            "holdings": rows,
+        }
+    )
 
 
 def main() -> None:
