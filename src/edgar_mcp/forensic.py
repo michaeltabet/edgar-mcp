@@ -199,8 +199,21 @@ CUR_ASSETS = ["us-gaap_AssetsCurrent"]
 CUR_LIAB = ["us-gaap_LiabilitiesCurrent"]
 PPE_NET = ["us-gaap_PropertyPlantAndEquipmentNet"]
 SGA = ["us-gaap_SellingGeneralAndAdministrativeExpense"]
-LTD = ["us-gaap_LongTermDebtNoncurrent", "us-gaap_LongTermDebt"]
-LTD_CUR = ["us-gaap_LongTermDebtCurrent", "us-gaap_DebtCurrent"]
+LTD = [
+    "us-gaap_LongTermDebtNoncurrent",
+    "us-gaap_LongTermDebtAndCapitalLeaseObligations",
+    "us-gaap_LongTermDebt",
+]
+LTD_CUR = [
+    "us-gaap_LongTermDebtCurrent",
+    "us-gaap_LongTermDebtAndCapitalLeaseObligationsCurrent",
+    "us-gaap_DebtCurrent",
+]
+STD_OTHER = [
+    "us-gaap_OtherShortTermBorrowings",
+    "us-gaap_ShortTermBorrowings",
+    "us-gaap_NotesPayableCurrent",
+]
 CASH = ["us-gaap_CashAndCashEquivalentsAtCarryingValue"]
 STI = [
     "us-gaap_MarketableSecuritiesCurrent",
@@ -720,12 +733,13 @@ def check_capital_structure(s: FactStore):
     _, ltd = s.inst(LTD)
     _, ltdc = s.inst(LTD_CUR)
     _, cp = s.inst(["us-gaap_CommercialPaper"])
+    _, std = s.inst(STD_OTHER)
     _, cash = s.inst(CASH)
     _, sti = s.inst(STI)
     _, ebit = s.get(EBIT)
     _, interest = s.get(INTEREST)
     _, nci = s.inst(["us-gaap_MinorityInterest"])
-    debt = sum(v for v in (ltd, ltdc, cp) if v)
+    debt = sum(v for v in (ltd, ltdc, cp, std) if v)
     if not debt:
         return out
     net_debt = debt - (cash or 0) - (sti or 0)
@@ -773,6 +787,223 @@ def check_capital_structure(s: FactStore):
             ),
         )
     )
+    return out
+
+
+def _concept_scan(s: FactStore, pattern: str, top: int = 12) -> list[dict]:
+    """All facts (consolidated + dimensioned) whose concept matches `pattern`,
+    largest absolute values first. Evidence rows for hiding-place surveys."""
+    df = s.all_df[s.all_df["numeric_value"].notna()]
+    hits = df[df["concept"].str.contains(pattern, case=False, regex=True)]
+    rows = []
+    for _, r in hits.iterrows():
+        ctx = s.x.contexts.get(r["context_ref"])
+        dims = getattr(ctx, "dimensions", None) or {}
+        rows.append(
+            {
+                "concept": str(r["concept"]),
+                "value": r["numeric_value"],
+                "value_formatted": fmt_value(r["numeric_value"]),
+                "period": r["period_end"] or r["period_instant"] or r["period_start"],
+                "dimensions": {
+                    a.split(":")[-1]: str(m).split(":")[-1] for a, m in dims.items()
+                }
+                or None,
+            }
+        )
+    rows.sort(key=lambda r: abs(r["value"] or 0), reverse=True)
+    # one row per (concept, dimension signature): keep the largest
+    seen, out = set(), []
+    for r in rows:
+        key = (r["concept"], tuple(sorted((r["dimensions"] or {}).items())))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out[:top]
+
+
+def check_fx_derivatives(s: FactStore):
+    """FX / derivatives / hedging — a classic surface for smoothing and
+    hiding: gains parked in OCI, hedge de-designations, notional far larger
+    than the exposure, FX 'transaction' losses recurring every year."""
+    out = []
+    notional = _concept_scan(s, r"DerivativeNotional|NotionalAmount")
+    dv_asset = _concept_scan(s, r"DerivativeFairValueOfDerivativeAsset|DerivativeAssets?$", 4)
+    dv_liab = _concept_scan(s, r"DerivativeFairValueOfDerivativeLiabilit|DerivativeLiabilit(?:y|ies)$", 4)
+    pnl = _concept_scan(s, r"GainLossOnDerivativeInstruments|DerivativeInstrumentsNotDesignatedAsHedgingInstrumentsGainLoss", 6)
+    oci = _concept_scan(s, r"CashFlowHedgeGainLoss|OtherComprehensiveIncomeLossDerivative", 6)
+    fx = _concept_scan(s, r"ForeignCurrencyTransactionGainLoss", 4)
+    if not any((notional, dv_asset, dv_liab, pnl, oci, fx)):
+        return out
+    _, rev = s.get(REVENUE)
+    biggest_notional = notional[0]["value"] if notional else None
+    metrics = {
+        "largest_notional": biggest_notional,
+        "notional_pct_revenue": pctf(biggest_notional, rev),
+        "derivative_gain_loss_in_earnings": pnl[0]["value"] if pnl else None,
+        "hedge_gain_loss_in_oci": oci[0]["value"] if oci else None,
+        "fx_transaction_gain_loss": fx[0]["value"] if fx else None,
+    }
+    sev = "info"
+    if rev and biggest_notional and abs(biggest_notional) > rev:
+        sev = "caution"
+    out.append(
+        F(
+            "fx:derivatives",
+            "fx_derivatives",
+            sev,
+            "derivative / FX hedging surface"
+            + (
+                f" — largest notional {fmt_value(biggest_notional)}"
+                if biggest_notional
+                else ""
+            ),
+            [],
+            metrics=metrics,
+            implication=(
+                "hedging is legitimate, but watch: (1) gains sitting in OCI that"
+                " get reclassified into earnings exactly when needed, (2)"
+                " de-designated hedges flipping mark-to-market into P&L, (3)"
+                " notional far above the underlying exposure = speculation"
+                " dressed as hedging, (4) recurring 'transaction' FX losses"
+                " excluded from adjusted earnings while hedge gains are kept"
+            ),
+            judgment={
+                "question": "treat derivative gains in earnings as operating?",
+                "default": "keep",
+                "options": [
+                    {"id": "keep", "label": "keep as reported"},
+                    {"id": "strip", "label": "strip derivative gains/losses from adjusted earnings"},
+                ],
+            },
+        )
+    )
+    # attach the survey rows as evidence-style detail
+    out[-1]["survey"] = {
+        "notional": notional,
+        "derivative_assets": dv_asset,
+        "derivative_liabilities": dv_liab,
+        "in_earnings": pnl,
+        "in_oci": oci,
+        "fx_transaction": fx,
+    }
+    return out
+
+
+def check_implied_cost_of_debt(s: FactStore):
+    """Implied rate = interest expense / average total debt, tied against any
+    disclosed weighted-average rate. A markup (implied >> disclosed) hints at
+    off-balance-sheet borrowings, big intra-year swings, or interest hiding in
+    capitalized costs; implied << disclosed hints at capitalized interest."""
+    out = []
+
+    def total_debt(idx):
+        vals = [
+            s.inst(LTD, idx)[1],
+            s.inst(LTD_CUR, idx)[1],
+            s.inst(["us-gaap_CommercialPaper"], idx)[1],
+            s.inst(STD_OTHER, idx)[1],
+        ]
+        t = sum(v for v in vals if v)
+        return t or None
+
+    d0, d1 = total_debt(0), total_debt(1)
+    _, interest = s.get(INTEREST)
+    if not (d0 and interest):
+        return out
+    avg_debt = (d0 + d1) / 2 if d1 else d0
+    implied = abs(interest) / avg_debt
+    _, wavg_lt = s.get(
+        ["us-gaap_LongtermDebtWeightedAverageInterestRate",
+         "us-gaap_DebtWeightedAverageInterestRate"], 0, s.instants
+    )
+    _, cap_int = s.get(["us-gaap_InterestCostsCapitalized",
+                        "us-gaap_InterestCostsCapitalizedAdjustment"])
+    gap_bp = round((implied - wavg_lt) * 10_000) if wavg_lt else None
+    sev = "info"
+    if gap_bp is not None and abs(gap_bp) > 150:
+        sev = "caution"
+    out.append(
+        F(
+            "capstruct:implied_cost_of_debt",
+            "capital_structure",
+            sev,
+            f"implied cost of debt {implied:.2%}"
+            + (f" vs disclosed weighted-avg {wavg_lt:.2%} ({gap_bp:+d}bp)"
+               if wavg_lt else " (no disclosed weighted-average rate tagged)"),
+            [
+                s.ev(INTEREST[0], interest),
+                s.ev(LTD[0], d0, 0, s.instants, note="total debt, current year"),
+                s.ev(LTD[0], d1, 1, s.instants, note="total debt, prior year"),
+                s.ev("us-gaap_InterestCostsCapitalized", cap_int,
+                     note="interest capitalized out of P&L"),
+            ],
+            metrics={
+                "implied_rate": round(implied, 5),
+                "disclosed_weighted_avg_rate": wavg_lt,
+                "gap_bp": gap_bp,
+                "avg_total_debt": avg_debt,
+                "capitalized_interest": cap_int,
+            },
+            formula=(
+                f"implied = |interest| / avg debt = {fmt_value(abs(interest))}"
+                f" / {fmt_value(avg_debt)} = {implied:.2%}"
+            ),
+            implication=(
+                "implied >> disclosed: interest on debt that isn't on the"
+                " balance sheet at year end (window-dressed repayments,"
+                " off-BS vehicles) or expensive short-term paper; implied <<"
+                " disclosed: capitalized interest flattering the P&L or debt"
+                " raised late in the year"
+            ),
+        )
+    )
+    return out
+
+
+def check_vie_offbalance(s: FactStore):
+    """VIEs / unconsolidated entities / guarantees — where 'empty companies'
+    live. Surveys VIE involvement, maximum-loss exposure, and guarantees the
+    balance sheet doesn't consolidate."""
+    out = []
+    vie = _concept_scan(s, r"VariableInterestEntity")
+    guar = _concept_scan(s, r"Guarantee[A-Z]|GuaranteeObligations", 6)
+    if not vie and not guar:
+        return out
+    _, equity = s.inst(EQUITY)
+    max_loss = next(
+        (r["value"] for r in vie if "MaximumLossExposure" in r["concept"]), None
+    )
+    biggest_guar = guar[0]["value"] if guar else None
+    exposure = (max_loss or 0) + (biggest_guar or 0)
+    sev = "info"
+    if equity and exposure > 0.10 * abs(equity):
+        sev = "caution"
+    out.append(
+        F(
+            "vie:offbalance",
+            "vie_offbalance_sheet",
+            sev,
+            "VIE / guarantee off-balance-sheet surface"
+            + (f" — max loss exposure {fmt_value(max_loss)}" if max_loss else "")
+            + (f", guarantees {fmt_value(biggest_guar)}" if biggest_guar else ""),
+            [s.ev(EQUITY[0], equity, 0, s.instants, note="total equity, for scale")],
+            metrics={
+                "vie_max_loss_exposure": max_loss,
+                "largest_guarantee": biggest_guar,
+                "exposure_pct_equity": pctf(exposure, equity),
+            },
+            implication=(
+                "unconsolidated VIEs and guarantees are the classic place to"
+                " park debt and losses outside the consolidated statements —"
+                " read the VIE footnote: who absorbs losses, what triggers"
+                " consolidation, and whether guaranteed obligations of"
+                " unconsolidated entities would be debt if brought on-book"
+            ),
+        )
+    )
+    out[-1]["survey"] = {"vie": vie, "guarantees": guar}
     return out
 
 
@@ -996,6 +1227,9 @@ CHECKS = [
     check_tax_forensics,
     check_working_capital,
     check_capital_structure,
+    check_implied_cost_of_debt,
+    check_fx_derivatives,
+    check_vie_offbalance,
     check_nonop_reliance,
     check_capitalization_policy,
     check_beneish,
