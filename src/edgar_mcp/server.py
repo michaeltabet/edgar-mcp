@@ -15,7 +15,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from . import forensic, macro, market, quality, store, taxonomy
+from . import dossier, forensic, macro, market, quality, store, taxonomy
 from .util import (
     IDENTITY,
     company_for,
@@ -1205,6 +1205,32 @@ def fred_series(
                                   persist=persist))
     except macro.FredKeyMissing as e:
         return jdump({"error": str(e)})
+
+
+# --------------------------------------------------------------------------- #
+# CFA full-financials dossier — the capstone
+# --------------------------------------------------------------------------- #
+
+
+@mcp.tool()
+def company_dossier(
+    company: str, years: int = 5, ticker: str | None = None, warm: bool = True
+) -> str:
+    """The full CFA-grade financial profile of one filer in a single call.
+
+    Warms the fact store (unless warm=false), then assembles a multi-year
+    three-statement spine (income statement, balance sheet, cash flow) with
+    each line resolved through a priority list of XBRL concept aliases (tags
+    drift across years), a complete ratio suite (profitability, DuPont ROE
+    decomposition, returns, liquidity, leverage & coverage, cash quality /
+    accruals), YoY growth, and — if `ticker` is given — live market multiples
+    (P/E, EV/EBITDA, P/B). Every reported line carries the us-gaap concept it
+    came from; a metric the filer never tagged returns null (never invented).
+
+    company: ticker/CIK/name for EDGAR. ticker: market symbol for multiples
+    (US or global, e.g. "D05.SI"). This is the one-shot "everything" view.
+    """
+    return jdump(dossier.build(company, years=years, ticker=ticker, warm=warm))
 
 
 def main() -> None:
