@@ -130,10 +130,18 @@ uv run fundamentalsmcp                      # stdio MCP server
 uv run python tests/live_smoke.py     # live end-to-end test against EDGAR
 ```
 
-Register in Claude Code:
+Register with any MCP client (stdio). Example client config:
 
-```sh
-claude mcp add fundamentals --scope user -- uv run --directory /path/to/fundamentalsmcp fundamentalsmcp
+```json
+{
+  "mcpServers": {
+    "fundamentals": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/fundamentalsmcp", "fundamentalsmcp"],
+      "env": { "EDGAR_IDENTITY": "Your Name you@example.com" }
+    }
+  }
+}
 ```
 
 Configuration (environment variables):
