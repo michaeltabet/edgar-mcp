@@ -11,7 +11,10 @@ import time
 
 import httpx
 
-IDENTITY = os.environ.get("EDGAR_IDENTITY", "Michael Tabet michael.a.tabet@gmail.com")
+# SEC requires a descriptive User-Agent ("Sample Company name admin@example.com").
+# Set EDGAR_IDENTITY to your own name + email; the placeholder below is only a
+# last resort so imports don't crash.
+IDENTITY = os.environ.get("EDGAR_IDENTITY", "edgar-mcp user you@example.com")
 
 _rate_lock = threading.Lock()
 _last_request = 0.0

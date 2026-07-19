@@ -1,13 +1,22 @@
 [project]
 name = "edgar-mcp"
 version = "0.1.0"
-description = "Deep, structured MCP access to SEC EDGAR: layered XBRL fact/definition/calc-tree tooling, section extraction, full-text search, insider parsing"
+description = "Deep, structured MCP access to SEC EDGAR: layered XBRL fact/definition/calc-tree tooling, a queryable DuckDB fact store, global market data (yfinance) and FRED macro, section extraction, full-text search, insider parsing"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["sec", "edgar", "xbrl", "mcp", "finance", "fundamentals", "yfinance", "fred"]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
 dependencies = [
+    "duckdb>=1.5.4",
     "edgartools>=5.40.1",
     "httpx>=0.28.1",
     "mcp>=1.9",
+    "yfinance>=1.5.1",
 ]
 
 [project.scripts]
