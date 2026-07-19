@@ -1,16 +1,22 @@
 # edgar-mcp
 
-Deep, structured MCP access to SEC EDGAR. The design goal: an AI using this
-server can take **any number in any filing** and see exactly what it is — the
-XBRL concept behind it, the official FASB/SEC definition of that concept, the
-period and segment/geography context it belongs to, what it arithmetically
-sums into and what sums to produce it, its rounding precision, and any
-footnotes attached. Not filing text blobs — parsed, labeled, linked data.
+Deep, structured MCP access to SEC EDGAR — plus a queryable fact store,
+global market data, macro, and semantic search over filing text.
+
+The design goal: an AI using this server can take **any number in any
+filing** and see exactly what it is — the XBRL concept behind it, the
+official FASB/SEC definition of that concept, the period and
+segment/geography context it belongs to, what it arithmetically sums into
+and what sums to produce it, its rounding precision, and any footnotes
+attached. Not filing text blobs — parsed, labeled, linked data. And then
+ask questions **across** filings, companies, and years in plain SQL.
 
 Built on [edgartools](https://github.com/dgunning/edgartools) (MIT) for XBRL
 parsing, plus direct SEC APIs (EFTS full-text search, `companyconcept` fact
-history) and the FASB/SEC taxonomy documentation labels (downloaded once,
-cached in SQLite at `~/.cache/edgar-mcp/`).
+history), the FASB/SEC taxonomy documentation labels, DuckDB (fact store),
+Yahoo Finance via yfinance (market data), FRED (macro, bring-your-own-key),
+and LanceDB + fastembed (offline semantic search). Local caches live in
+`~/.cache/edgar-mcp/`.
 
 ## Tool layers
 
@@ -39,6 +45,32 @@ cached in SQLite at `~/.cache/edgar-mcp/`).
 | `statement_history` | one statement stitched across N filings — long multi-year (or multi-quarter) table, concepts aligned across label changes |
 | `compare_peers` | one concept across ALL SEC filers for one period (Frames API) — economy-wide or a specific CIK list |
 
+**Fact store** (cross-filing SQL — no truncation wall)
+| tool | what it does |
+|---|---|
+| `warm_fact_store` | parse a company's filings once; land every tagged fact (concept · value · period · dimensions · calc weight · precision · provenance) into a local DuckDB |
+| `query_fact_store` | arbitrary **read-only** SQL across everything warmed: `facts`, `filings`, `prices`, `macro` tables — multi-year, multi-segment, multi-company questions in one query |
+| `fact_store_status` | what's loaded |
+
+**Dossier** (the capstone)
+| tool | what it does |
+|---|---|
+| `company_dossier` | one call → multi-year three-statement spine (concept-alias resolution across tag drift), full ratio suite (margins, DuPont ROE decomposition, returns, liquidity, leverage & coverage, cash quality / accruals), YoY growth, live market multiples, and per-line concept provenance. Nulls are never invented |
+
+**Market & macro**
+| tool | what it does |
+|---|---|
+| `market_quote` | live snapshot for GLOBAL tickers (US, SGX `D05.SI`, LSE `.L`, HKEX `.HK`): price, market cap, EV, P/E, EV/EBITDA, P/B — turns EDGAR fundamentals into real multiples |
+| `market_history` | OHLCV history, persisted into the DuckDB `prices` table for SQL joins against fundamentals |
+| `fred_search` / `fred_series` | FRED macro series (rates, CPI, FX, international), persisted into the `macro` table. Bring your own free key via `FRED_API_KEY` |
+
+**Semantic search** (offline, no API key)
+| tool | what it does |
+|---|---|
+| `index_filing_text` | chunk + embed every section of a filing into a local LanceDB index (small ONNX embedder — no torch, nothing leaves your machine) |
+| `semantic_search_filings` | find where filings discuss a concept even when the wording differs (supply concentration, going concern, a specific lawsuit), with section + accession provenance |
+| `vector_store_status` | what's indexed |
+
 **Forensic** (evidence-first; nothing adjusted without a human decision)
 | tool | what it does |
 |---|---|
@@ -58,6 +90,17 @@ cached in SQLite at `~/.cache/edgar-mcp/`).
 | `insider_transactions` | Forms 3/4/5 parsed from XML: who, role, code, shares, price, owned-after |
 | `fund_holdings` | a 13F manager's latest portfolio: issuer, CUSIP, ticker, value, shares, put/call, voting, % of portfolio |
 
+## Skills (agent playbooks, in `skills/`)
+
+Methodology files an agent loads to use the tools *well* — each with hard
+anti-hallucination rules (provenance on every number; never assert what other
+investors are doing; sentiment is a walled, labelled layer):
+
+- **comps-analysis** — adjustment-first comparable-companies & time-series analysis
+- **forensic-deep-dive** — analyst-in-the-loop quality of earnings: hunt every adjustment (pensions, leases, SBC, tax, M&A deal effects, capitalization policy) → decision table with pre-tax AND post-tax EPS impact + recurrence evidence → the analyst chooses → deterministic bridge
+- **company-dossier** — full primary-source workup: business model (Item 1), ranked risks (Item 1A), financials, comps, YoY, insiders
+- **market-sentiment** — news/retail narrative as a clearly-labelled opinion layer, fact-checked against the filings
+
 ## Run
 
 ```sh
@@ -65,15 +108,22 @@ uv run edgar-mcp                      # stdio MCP server
 uv run python tests/live_smoke.py     # live end-to-end test against EDGAR
 ```
 
-Registered in Claude Code (user scope) as `edgar`:
+Register in Claude Code:
 
 ```sh
-claude mcp add edgar --scope user -- uv run --directory /Users/michaeltabet/edgar-mcp edgar-mcp
+claude mcp add edgar --scope user -- uv run --directory /path/to/edgar-mcp edgar-mcp
 ```
 
-Identity for SEC rate-limit compliance comes from `EDGAR_IDENTITY` (defaults
-to Michael's email). Direct SEC calls are throttled under 10 req/s; parsed
-XBRL objects are LRU-cached per accession.
+Configuration (environment variables):
+
+- `EDGAR_IDENTITY` — **required by SEC fair-use policy**: your name + email
+  for the User-Agent (e.g. `"Jane Doe jane@example.com"`)
+- `FRED_API_KEY` — optional, for macro tools ([free key](https://fredaccount.stlouisfed.org/apikeys))
+- `EDGAR_MCP_TRANSPORT=streamable-http` (+ `EDGAR_MCP_HOST`/`EDGAR_MCP_PORT`) — serve over HTTP instead of stdio
+
+Direct SEC calls are throttled under 10 req/s; parsed XBRL objects are
+LRU-cached per accession; taxonomy definitions, the DuckDB fact store, and
+the vector index cache under `~/.cache/edgar-mcp/`.
 
 ## Example workflow (spin-off hunting)
 
@@ -83,3 +133,15 @@ XBRL objects are LRU-cached per accession.
 4. `financial_statements(accession, "income")` → carve-out financials, every number tagged
 5. `explain_number(accession, concept=...)` → what each number actually is
 6. `concept_timeseries` → history once the spinco trades on its own
+
+## Example workflow (cross-year in one query)
+
+1. `warm_fact_store("AAPL", forms=["10-K"], limit=5)`
+2. `query_fact_store("SELECT fiscal_year, max(numeric_value) FROM facts WHERE concept LIKE '%RevenueFromContract%' AND NOT is_dimensioned AND period_type='duration' GROUP BY 1 ORDER BY 1")`
+3. `company_dossier("AAPL", ticker="AAPL")` → the whole picture, provenance-tagged
+
+## License
+
+Apache-2.0. Data comes from SEC EDGAR (public domain), FASB/SEC taxonomies,
+Yahoo Finance (via yfinance — check Yahoo's terms for your use), and FRED
+(your own API key). This is an analysis tool, not investment advice.
