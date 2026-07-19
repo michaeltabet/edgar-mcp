@@ -18,6 +18,20 @@ Yahoo Finance via yfinance (market data), FRED (macro, bring-your-own-key),
 and LanceDB + fastembed (offline semantic search). Local caches live in
 `~/.cache/edgar-mcp/`.
 
+## Why this exists
+
+I built this to make access to financial data actually easy — for agents and
+for analysts. The current focus is **structuring the data as far as it can
+go** (the DuckDB fact store, cross-filing SQL, the dossier) and **better
+retrieval** (semantic search over filing text, concept-alias resolution
+across tag drift). Auditability is tight by construction: every number
+carries its source — accession + XBRL concept — so anything the tools state
+can be traced back to the filing it came from.
+
+**Feedback and contributions are very welcome.** If you want a capability
+that isn't here, [open an issue](../../issues) and tell me what you want —
+feature requests are as useful as PRs. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Tool layers
 
 **Discovery**
