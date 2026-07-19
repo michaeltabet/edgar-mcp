@@ -1,4 +1,4 @@
-"""Forensic engine: the CFA earnings-quality mega-checklist, evidence-first.
+"""Forensic engine: the earnings-quality mega-checklist, evidence-first.
 
 Design contract:
   * Every finding cites the exact facts it is built from (concept, period,

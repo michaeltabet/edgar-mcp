@@ -96,7 +96,7 @@ feature requests are as useful as PRs. See [CONTRIBUTING.md](CONTRIBUTING.md).
 **Forensic** (evidence-first; nothing adjusted without a human decision)
 | tool | what it does |
 |---|---|
-| `forensic_scan` | the CFA-style mega-checklist: add-back items with recurrence, pension (funded status vs equity, discount-rate & expected-return assumptions, non-service cost), operating-lease capitalization & lease-adjusted debt, JV/equity-method one-line consolidation, discontinued ops, tax forensics (valuation-allowance changes, unrecognized tax benefits, ETR swings), working capital days, capital structure & interest coverage, non-operating reliance, capitalization policy, Beneish M-score, SBC-vs-buyback offset. **Every finding cites its exact tagged facts; every judgment call is surfaced as pre-quantified options, never auto-applied** |
+| `forensic_scan` | the earnings-quality mega-checklist: add-back items with recurrence, pension (funded status vs equity, discount-rate & expected-return assumptions, non-service cost), operating-lease capitalization & lease-adjusted debt, JV/equity-method one-line consolidation, discontinued ops, tax forensics (valuation-allowance changes, unrecognized tax benefits, ETR swings), working capital days, capital structure & interest coverage, non-operating reliance, capitalization policy, Beneish M-score, SBC-vs-buyback offset. **Every finding cites its exact tagged facts; every judgment call is surfaced as pre-quantified options, never auto-applied** |
 | `apply_adjustments` | deterministic adjusted EBIT → pre-tax → NI → EPS bridge from the analyst's decisions (finding_id → option_id); same filing + same decisions = same numbers, ledger included |
 | `restatement_check` | 8-K Item 4.01 (auditor change) / 4.02 (non-reliance), 10-K/A / 10-Q/A amendments, NT late-filing notices |
 
@@ -162,6 +162,26 @@ the vector index cache under `~/.cache/fundamentalsmcp/`.
 1. `warm_fact_store("AAPL", forms=["10-K"], limit=5)`
 2. `query_fact_store("SELECT fiscal_year, max(numeric_value) FROM facts WHERE concept LIKE '%RevenueFromContract%' AND NOT is_dimensioned AND period_type='duration' GROUP BY 1 ORDER BY 1")`
 3. `company_dossier("AAPL", ticker="AAPL")` → the whole picture, provenance-tagged
+
+## Scheduled / orchestrated use
+
+The server works well as a data layer under an orchestrator — e.g. a
+[Temporal](https://temporal.io) workflow or an Airflow DAG that re-warms the
+fact store daily, refreshes prices/macro, and re-runs forensic scans on new
+filings. Two things to respect:
+
+- **SEC rate limits.** All direct SEC calls are already throttled under
+  10 req/s with your `EDGAR_IDENTITY`, but a parallel fan-out across many
+  workers multiplies that — keep concurrency low (one warm task at a time is
+  plenty; a daily batch of even hundreds of filings is minutes of work) and
+  back off on 403s.
+- **Warm incrementally.** `warm_fact_store` is idempotent and skips filings
+  already ingested, so a daily run only pays for what's new. The same applies
+  to `index_filing_text` (per-accession) and `market_history`/`fred_series`
+  (upserts).
+
+Run it over streamable-HTTP (`EDGAR_MCP_TRANSPORT=streamable-http`) to share
+one server — and one cache — across workflow workers.
 
 ## License
 

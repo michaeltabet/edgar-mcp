@@ -844,7 +844,7 @@ def analyst_flags(accession_no: str) -> str:
 
 @mcp.tool()
 def forensic_scan(accession_no: str, severity_min: str = "info") -> str:
-    """The full CFA-style forensic checklist on one filing — every finding
+    """The full forensic earnings-quality checklist on one filing — every finding
     evidence-backed, every judgment call surfaced for the human to decide.
 
     Checks: classic add-back items (SBC, restructuring, impairments,
@@ -1224,7 +1224,7 @@ def fred_series(
 
 
 # --------------------------------------------------------------------------- #
-# CFA full-financials dossier — the capstone
+# full-financials dossier — the capstone
 # --------------------------------------------------------------------------- #
 
 
@@ -1232,7 +1232,7 @@ def fred_series(
 def company_dossier(
     company: str, years: int = 5, ticker: str | None = None, warm: bool = True
 ) -> str:
-    """The full CFA-grade financial profile of one filer in a single call.
+    """The full financial profile of one filer in a single call.
 
     Warms the fact store (unless warm=false), then assembles a multi-year
     three-statement spine (income statement, balance sheet, cash flow) with

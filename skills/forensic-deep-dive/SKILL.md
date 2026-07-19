@@ -61,7 +61,7 @@ labelled REPORTED — not the deliverable.
 
 ### Step 2 — find EVERY adjustment (the hunt)
 Run the engines on the subject filing:
-- `forensic_scan(acc, severity_min="info")` — the CFA mega-checklist.
+- `forensic_scan(acc, severity_min="info")` — the earnings-quality mega-checklist.
 - `analyst_flags(acc)` — SBC, restructuring, impairments, one-time gains/
   losses above the tax line, intangible amortization, capitalized costs, plus
   diagnostics (cash conversion, accruals, receivables-vs-revenue, ETR swings).

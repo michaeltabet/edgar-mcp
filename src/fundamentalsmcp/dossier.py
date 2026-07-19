@@ -1,4 +1,4 @@
-"""CFA-grade full-financials dossier for a single filer.
+"""Full-financials dossier for a single filer.
 
 The capstone tool. It stitches the pieces the rest of the server produces —
 the DuckDB fact store (multi-year XBRL), market data (multiples), and macro —
