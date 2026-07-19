@@ -14,7 +14,9 @@ classifiers = [
 dependencies = [
     "duckdb>=1.5.4",
     "edgartools>=5.40.1",
+    "fastembed>=0.8.0",
     "httpx>=0.28.1",
+    "lancedb>=0.34.0",
     "mcp>=1.9",
     "yfinance>=1.5.1",
 ]

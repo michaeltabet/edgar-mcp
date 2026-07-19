@@ -15,7 +15,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from . import dossier, forensic, macro, market, quality, store, taxonomy
+from . import dossier, forensic, macro, market, quality, store, taxonomy, vector
 from .util import (
     IDENTITY,
     company_for,
@@ -1231,6 +1231,41 @@ def company_dossier(
     (US or global, e.g. "D05.SI"). This is the one-shot "everything" view.
     """
     return jdump(dossier.build(company, years=years, ticker=ticker, warm=warm))
+
+
+# --------------------------------------------------------------------------- #
+# semantic search over filing text (LanceDB + fastembed, offline)
+# --------------------------------------------------------------------------- #
+
+
+@mcp.tool()
+def index_filing_text(accession_no: str) -> str:
+    """Chunk + embed every section of a filing into the local vector index so
+    it can be searched by meaning. Offline (small ONNX model, no API key).
+    Idempotent per filing. Run before semantic_search_filings.
+    """
+    return jdump(vector.index_filing(accession_no))
+
+
+@mcp.tool()
+def semantic_search_filings(
+    query: str, k: int = 8, company: str | None = None,
+    accession_no: str | None = None
+) -> str:
+    """Semantic search across indexed filing text — find where filings discuss
+    a concept even when the wording differs (supply concentration, going
+    concern, a specific lawsuit, revenue-recognition policy). Optional company/
+    accession filters. Each hit carries section + accession provenance; feed it
+    to read_section / explain_number for the underlying data. Index first.
+    """
+    return jdump(vector.search(query, k=k, company=company,
+                               accession=accession_no))
+
+
+@mcp.tool()
+def vector_store_status() -> str:
+    """What filing text is currently in the vector index (chunks per filing)."""
+    return jdump(vector.status())
 
 
 def main() -> None:
