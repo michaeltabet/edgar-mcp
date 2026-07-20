@@ -18,6 +18,7 @@ dependencies = [
     "httpx>=0.28.1",
     "lancedb>=0.34.0",
     "mcp>=1.9",
+    "scikit-learn>=1.9.0",
     "yfinance>=1.5.1",
 ]
 
@@ -41,3 +42,5 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # F() is the finding constructor — terse on purpose, used hundreds of times
 "src/fundamentalsmcp/forensic.py" = ["N802"]
+# X / Xs are the conventional names for a feature matrix in sklearn code
+"src/fundamentalsmcp/analytics.py" = ["N806"]

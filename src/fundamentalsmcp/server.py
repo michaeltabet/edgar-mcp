@@ -15,7 +15,18 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from . import dossier, forensic, macro, market, quality, store, taxonomy, uk, vector
+from . import (
+    analytics,
+    dossier,
+    forensic,
+    macro,
+    market,
+    quality,
+    store,
+    taxonomy,
+    uk,
+    vector,
+)
 from .util import (
     IDENTITY,
     company_for,
@@ -1323,6 +1334,54 @@ def uk_filings(company_number: str, category: str | None = None,
     document ids for the filed iXBRL accounts.
     """
     return _uk_guard(uk.filings, company_number, category=category, limit=limit)
+
+
+# --------------------------------------------------------------------------- #
+# statistical / ML analysis over the fact store
+# --------------------------------------------------------------------------- #
+
+
+@mcp.tool()
+def trend_analysis(company: str, concept: str) -> str:
+    """Fit a trend to one XBRL concept's annual series: slope per year, R²,
+    CAGR, and the per-year residuals showing which years break the trend.
+
+    Reports n_observations and an explicit reliability note — with the ~5
+    annual points a filer gives you this is DESCRIPTIVE, not inferential, and
+    the tool says so rather than implying significance. Warm the company first.
+    """
+    return jdump(analytics.trend(company, concept))
+
+
+@mcp.tool()
+def anomaly_scan(company: str, years: int = 6, threshold: float = 2.5) -> str:
+    """Flag years that are statistically unlike a company's own other years.
+
+    Robust z-scores (median/MAD, so one blowout year can't hide by inflating
+    the spread) across the ratio suite — margins, returns, leverage, cash
+    conversion, accruals. A flag is a pointer to investigate with
+    forensic_scan / explain_number, never a conclusion.
+    """
+    return jdump(analytics.anomaly_scan(company, years=years,
+                                        threshold=threshold))
+
+
+@mcp.tool()
+def peer_scan(companies: list[str], year: int | None = None,
+              n_clusters: int = 0) -> str:
+    """Cross-sectional statistical comparison across 3+ companies — the regime
+    where multivariate methods genuinely apply (many samples, one period).
+
+    Builds each company's ratio vector, reports robust z-scores per metric
+    across the peer set (who is the outlier on what), and optionally KMeans-
+    clusters the standardized vectors (n_clusters>=2) to group similar
+    business profiles. Warms each company automatically.
+
+    Needs 3+ companies to run and 5+ to compute z-scores; with fewer, the
+    outlier list is explicitly reported as NOT MEASURED rather than empty.
+    """
+    return jdump(analytics.peer_scan(companies, year=year,
+                                     n_clusters=n_clusters))
 
 
 def main() -> None:

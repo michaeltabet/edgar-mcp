@@ -93,6 +93,13 @@ feature requests are as useful as PRs. See [CONTRIBUTING.md](CONTRIBUTING.md).
 | `uk_company_profile` | profile + officers + **persons with significant control** (the beneficial-ownership register — who actually controls the company), accounts status, charges, insolvency history |
 | `uk_filings` | filing history incl. the filed accounts documents |
 
+**Statistics / ML** (honest about sample size)
+| tool | what it does |
+|---|---|
+| `trend_analysis` | OLS trend on one concept's annual series: slope/year, R², CAGR, per-year residuals showing which years break trend. Reports `n` and states plainly that ~5 annual points are **descriptive, not inferential** — no p-values are fabricated |
+| `anomaly_scan` | flags years statistically unlike a company's *own* other years, using robust z-scores (median/MAD) with small-sample guards: needs n≥5, scale floored at 5% of the level, scores capped — so a near-constant series can't manufacture a fake "18-sigma" event |
+| `peer_scan` | cross-sectional comparison across 3+ companies (the regime where multivariate methods genuinely apply): robust z-scores per metric to find who's the outlier on what, plus optional KMeans clustering of standardized ratio vectors. With <5 peers the outlier list is reported as **NOT MEASURED**, never as an empty "all clear" |
+
 **Forensic** (evidence-first; nothing adjusted without a human decision)
 | tool | what it does |
 |---|---|
